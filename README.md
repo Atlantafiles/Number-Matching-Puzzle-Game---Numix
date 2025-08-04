@@ -1,4 +1,4 @@
-# Number Master Flutter Game
+# Number Matching Puzzle Game - Numix
 A Flutter-based number-matching puzzle game inspired by 'Number Master' by KiwiFun, featuring clean architecture and custom matching mechanics.
 # 🎮 Game Overview
 Number Master is a puzzle game where players match numbers following specific rules. Each level must be completed within 2 minutes, with matched cells becoming dull but remaining visible. The game features three distinct levels with increasing difficulty.

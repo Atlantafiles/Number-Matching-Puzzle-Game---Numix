@@ -6,17 +6,17 @@ Number Master is a puzzle game where players match numbers following specific ru
 
 # Matching Rules
 
-Equal Numbers: Match two cells with identical numbers
-Sum to 10: Match two cells whose numbers add up to 10
-Examples: 5 + 5, 3 + 7, 2 + 8, 4 + 6, 1 + 9
+- Equal Numbers: Match two cells with identical numbers
+- Sum to 10: Match two cells whose numbers add up to 10
+- Examples: 5 + 5, 3 + 7, 2 + 8, 4 + 6, 1 + 9
 
 # Game Flow
 
-Tap First Cell: Cell becomes highlighted
-Tap Second Cell: Game checks matching rule
-Valid Match: Both cells become dull with visual effect
-Invalid Match: Cells animate (shake/red flash) and reset
-Level Complete: All possible matches found within 2 minutes
+- Tap First Cell: Cell becomes highlighted
+- Tap Second Cell: Game checks matching rule
+- Valid Match: Both cells become dull with visual effect
+- Invalid Match: Cells animate (shake/red flash) and reset
+- Level Complete: All possible matches found within 2 minutes
 
 # Visual Feedback
 
@@ -55,7 +55,7 @@ Android device or emulator
 # Installation
 
 1. Clone the repository
-- git clone https://github.com/yourusername/number-master-flutter.git
+- git clone https://github.com/Atlanatfiles/number-master-flutter.git
 - cd number-master-flutter
 
 2. Install dependencies

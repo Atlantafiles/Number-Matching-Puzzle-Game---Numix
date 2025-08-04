@@ -20,37 +20,37 @@ Number Master is a puzzle game where players match numbers following specific ru
 
 # Visual Feedback
 
-✅ Valid Match: Cells fade out with success animation
-❌ Invalid Match: Shake animation with red flash
-🎯 Selected Cell: Highlighted border/background
-⏱️ Timer: Countdown display for 2-minute limit
+- ✅ Valid Match: Cells fade out with success animation
+- ❌ Invalid Match: Shake animation with red flash
+- 🎯 Selected Cell: Highlighted border/background
+- ⏱️ Timer: Countdown display for 2-minute limit
 
 # 🏗️ Architecture
 # Project Structure
-lib/
-├── main.dart
-├── models/
-│   ├── cells.dart
-│   ├── level.dart
-│   └── game_state.dart
-├── services/
-│   ├── game_controller.dart
-│   ├── level_generator.dart
-├── widgets/
-│   ├── grid_cell_widget.dart
-│   ├── game_grid.dart
-├── screens/
-│   ├── game_screen.dart
-└── utils/
-    ├── constants.dart
+    lib/
+    ├── main.dart
+    ├── models/
+    │   ├── cells.dart
+    │   ├── level.dart
+    │   └── game_state.dart
+    ├── services/
+    │   ├── game_controller.dart
+    │   ├── level_generator.dart
+    ├── widgets/
+    │   ├── grid_cell_widget.dart
+    │   ├── game_grid.dart
+    ├── screens/
+    │   ├── game_screen.dart
+    └── utils/
+        ├── constants.dart
 
 # 🚀 Getting Started
 # Prerequisites
 
-Flutter SDK (stable channel)
-Dart SDK
-Android Studio / VS Code
-Android device or emulator
+- Flutter SDK (stable channel)
+- Dart SDK
+- Android Studio / VS Code
+- Android device or emulator
 
 # Installation
 
@@ -75,12 +75,12 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 # 👨‍💻 Developer
 
-Atlanta Gogoi
-GitHub: @Atlanatfiles
-Email: atlanatgogoi11@gmail.com
+- Atlanta Gogoi
+- GitHub: @Atlanatfiles
+- Email: atlanatgogoi11@gmail.com
 
 # 🙏 Acknowledgments
 
-Inspired by 'Number Master' by KiwiFun
-Flutter community for excellent documentation
-Contributors and testers
+- Inspired by 'Number Master' by KiwiFun
+- Flutter community for excellent documentation
+- Contributors and testers

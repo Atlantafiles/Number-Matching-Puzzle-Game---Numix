@@ -66,7 +66,7 @@ Number Master is a puzzle game where players match numbers following specific ru
 
 # 🎬 Demo
 Check out the demo video to see the game in action!
-[Watch Demo Video](./demo-video.mp4)
+[Watch Demo Video](https://youtube.com/shorts/s7CMqP6HqC8?feature=share)
 
 # 📱 Download
 Download the latest APK from GitHub Releases

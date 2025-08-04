@@ -64,6 +64,9 @@ Android device or emulator
 3. Run the application
 - flutter run
 
+# 🎬 Demo
+Check out the demo video to see the game in action!
+
 # 📱 Download
 Download the latest APK from GitHub Releases
 
@@ -76,7 +79,7 @@ Atlanta Gogoi
 GitHub: @Atlanatfiles
 Email: atlanatgogoi11@gmail.com
 
-🙏 Acknowledgments
+# 🙏 Acknowledgments
 
 Inspired by 'Number Master' by KiwiFun
 Flutter community for excellent documentation

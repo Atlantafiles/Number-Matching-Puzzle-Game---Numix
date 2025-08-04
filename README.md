@@ -55,7 +55,7 @@ Android device or emulator
 # Installation
 
 1. Clone the repository
-- git clone https://github.com/Atlanatfiles/number-master-flutter.git
+- git clone [https://github.com/Atlanatfiles/number-master-flutter.git](https://github.com/Atlantafiles/Number-Matching-Puzzle-Game---Numix.git)
 - cd number-master-flutter
 
 2. Install dependencies

@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/cupertino.dart';
 import 'cells.dart';
 import 'level.dart';
 import '../services/level_generator.dart';
@@ -29,15 +29,22 @@ class GameState extends ChangeNotifier {
   // Game progress
   int _score = 0;
   int _matchCount = 0;
-  int _timeRemaining = 120; // 2 minutes in seconds
+  int _timeRemaining = 120;
   GameStatus _status = GameStatus.playing;
 
-  // Animation flags
+  // Animation and UI state
   bool _isAnimating = false;
   String _lastMessage = '';
-
-  // Path visualization
   List<Cell> _currentPath = [];
+  int _bestScore = 0;
+
+  // Performance optimization flags
+  bool _suppressNotifications = false;
+  bool _needsGridUpdate = false;
+  DateTime _lastClickTime = DateTime.now();
+
+  // Debouncing for rapid clicks
+  static const Duration _clickDebounceTime = Duration(milliseconds: 100);
 
   // Getters
   List<List<Cell>> get grid => _grid;
@@ -50,6 +57,7 @@ class GameState extends ChangeNotifier {
   bool get isAnimating => _isAnimating;
   String get lastMessage => _lastMessage;
   List<Cell> get currentPath => _currentPath;
+  int get bestScore => _bestScore;
 
   // Grid dimensions
   int get gridSize => _currentLevel.gridSize;
@@ -58,38 +66,62 @@ class GameState extends ChangeNotifier {
   double get progress => _matchCount / _currentLevel.targetMatches;
   bool get isLevelComplete => _matchCount >= _currentLevel.targetMatches;
 
-  int _bestScore = 0;
-
-  int get bestScore => _bestScore;
-
-
-  // to save best score
-  Future<void> _saveBestScore() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('best_score', _bestScore);
-  }
-
-  void checkAndUpdateBestScore() {
-    if (score > bestScore) {
-      _bestScore = score;
-      _saveBestScore(); // Save to persistent storage
-      notifyListeners(); // Update UI
+  // Batch notifications for better performance
+  void _batchedNotify() {
+    if (!_suppressNotifications && _needsGridUpdate) {
+      _needsGridUpdate = false;
+      notifyListeners();
     }
   }
 
- // whenever the score increases
-  void addScore(int points) {
-    _score += points;
-    checkAndUpdateBestScore(); // Check for new high score
-    notifyListeners();
+  void _scheduleNotification() {
+    _needsGridUpdate = true;
+    if (!_suppressNotifications) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _batchedNotify());
+    }
   }
 
+  // Best score management with reduced I/O
+  SharedPreferences? _prefs;
+  bool _prefsInitialized = false;
 
-  // Initialize game with specific level
-  void initializeGame(Level level) {
+  Future<void> _initializePrefs() async {
+    if (!_prefsInitialized) {
+      _prefs = await SharedPreferences.getInstance();
+      _bestScore = _prefs?.getInt('best_score') ?? 0;
+      _prefsInitialized = true;
+    }
+  }
+
+  Future<void> _saveBestScore() async {
+    await _initializePrefs();
+    await _prefs?.setInt('best_score', _bestScore);
+  }
+
+  void checkAndUpdateBestScore() {
+    if (_score > _bestScore) {
+      _bestScore = _score;
+      _saveBestScore(); // Async save doesn't block UI
+      _scheduleNotification();
+    }
+  }
+
+  void addScore(int points) {
+    _score += points;
+    checkAndUpdateBestScore();
+    _scheduleNotification();
+  }
+
+  // Optimized game initialization
+  void initializeGame(Level level) async {
+    _suppressNotifications = true; // Batch all updates
+
+    await _initializePrefs(); // Load best score
+
     _currentLevel = level;
+    GameController.clearCache(); // Clear cache for new grid
 
-    // Use the optimal grid generator with numbers limited to 1-9
+    // Generate grid efficiently
     _grid = LevelGenerator.generateOptimalGrid(_createLimitedLevel(level));
 
     _score = 0;
@@ -98,84 +130,114 @@ class GameState extends ChangeNotifier {
     _status = GameStatus.playing;
     _selectedCell = null;
     _currentPath = [];
+    _isAnimating = false;
+    _lastMessage = '';
 
+    _suppressNotifications = false;
     notifyListeners();
   }
 
-  // Create a level with numbers limited to 1-9
   Level _createLimitedLevel(Level originalLevel) {
-    final limitedNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9];
-
     return Level(
       levelNumber: originalLevel.levelNumber,
       gridSize: originalLevel.gridSize,
-      availableNumbers: limitedNumbers,
+      availableNumbers: [1, 2, 3, 4, 5, 6, 7, 8, 9],
       description: originalLevel.description,
       timeLimit: originalLevel.timeLimit,
       targetMatches: originalLevel.targetMatches,
     );
   }
 
-  // Handle cell selection with path validation
+  // Optimized cell selection with debouncing
   MatchResult selectCell(int row, int col) {
+    final now = DateTime.now();
+    if (now.difference(_lastClickTime) < _clickDebounceTime) {
+      return MatchResult.invalid; // Debounce rapid clicks
+    }
+    _lastClickTime = now;
+
     if (_status != GameStatus.playing || _isAnimating) {
+      return MatchResult.invalid;
+    }
+
+    // Bounds checking
+    if (row < 0 || row >= gridSize || col < 0 || col >= gridSize) {
       return MatchResult.invalid;
     }
 
     final cell = _grid[row][col];
 
-    // Can't select already matched cells
     if (cell.isMatched) {
       return MatchResult.alreadyMatched;
     }
 
-    // If no cell is selected, select this one
     if (_selectedCell == null) {
       _selectCell(cell);
       return MatchResult.valid;
     }
 
-    // If same cell is clicked, deselect
     if (_selectedCell == cell) {
       _deselectCell();
       return MatchResult.valid;
     }
 
-    // Try to match with selected cell (with path validation)
     return _tryMatch(_selectedCell!, cell);
   }
 
   void _selectCell(Cell cell) {
+    _suppressNotifications = true;
+
     _grid[cell.row][cell.col] = cell.copyWith(state: CellState.selected);
     _selectedCell = _grid[cell.row][cell.col];
     _currentPath = [];
+
+    _suppressNotifications = false;
     notifyListeners();
   }
 
   void _deselectCell() {
     if (_selectedCell != null) {
+      _suppressNotifications = true;
+
       _grid[_selectedCell!.row][_selectedCell!.col] =
           _selectedCell!.copyWith(state: CellState.normal);
       _selectedCell = null;
       _currentPath = [];
+
+      _suppressNotifications = false;
       notifyListeners();
     }
   }
 
   MatchResult _tryMatch(Cell cell1, Cell cell2) {
+    _suppressNotifications = true;
     _isAnimating = true;
-    notifyListeners();
 
-    // Check if it's a valid match with path connectivity
-    if (!GameController.canCellsMatch(cell1, cell2, _grid)) {
-      _lastMessage = 'No valid path!';
+    // Quick validation before expensive path checking
+    if (!GameController.canMatch(cell1.value, cell2.value)) {
+      _lastMessage = 'Numbers don\'t match!';
+      _suppressNotifications = false;
 
-      Future.delayed(const Duration(milliseconds: 500), () {
+      Future.delayed(const Duration(milliseconds: 300), () {
         _isAnimating = false;
         _deselectCell();
-        notifyListeners();
       });
 
+      notifyListeners();
+      return MatchResult.invalid;
+    }
+
+    // Check path connectivity
+    if (!GameController.hasValidPath(cell1, cell2, _grid)) {
+      _lastMessage = 'No valid path!';
+      _suppressNotifications = false;
+
+      Future.delayed(const Duration(milliseconds: 300), () {
+        _isAnimating = false;
+        _deselectCell();
+      });
+
+      notifyListeners();
       return MatchResult.noPath;
     }
 
@@ -183,14 +245,16 @@ class GameState extends ChangeNotifier {
     final path = GameController.getPath(cell1, cell2, _grid);
     if (path != null) {
       _currentPath = path;
-      notifyListeners();
     }
 
-    // Perform the match
     _performMatch(cell1, cell2);
     _lastMessage = 'Great match!';
 
-    Future.delayed(const Duration(milliseconds: 800), () {
+    _suppressNotifications = false;
+    notifyListeners();
+
+    // Clear animation state after delay
+    Future.delayed(const Duration(milliseconds: 600), () {
       _currentPath = [];
       _isAnimating = false;
       _checkGameComplete();
@@ -208,11 +272,14 @@ class GameState extends ChangeNotifier {
     // Update game state
     _selectedCell = null;
     _matchCount++;
-    _score += _calculateScore(cell1.value, cell2.value);
+    final points = _calculateScore(cell1.value, cell2.value);
+    addScore(points);
+
+    // Clear cache when grid changes
+    GameController.clearCache();
   }
 
   int _calculateScore(int value1, int value2) {
-    // Base score for any match
     int baseScore = 10;
 
     // Bonus for sum-to-10 matches
@@ -225,8 +292,10 @@ class GameState extends ChangeNotifier {
       baseScore += value1;
     }
 
-    // Bonus for time remaining (encourage quick matches)
-    if (_timeRemaining > 60) {
+    // Time bonus for quick matches
+    if (_timeRemaining > _currentLevel.timeLimit * 0.75) {
+      baseScore += 3;
+    } else if (_timeRemaining > _currentLevel.timeLimit * 0.5) {
       baseScore += 2;
     }
 
@@ -243,7 +312,7 @@ class GameState extends ChangeNotifier {
     }
   }
 
-  // Timer management
+  // Optimized timer with reduced notifications
   void decrementTime() {
     if (_status == GameStatus.playing && _timeRemaining > 0) {
       _timeRemaining--;
@@ -251,9 +320,13 @@ class GameState extends ChangeNotifier {
       if (_timeRemaining == 0) {
         _status = GameStatus.timeUp;
         _lastMessage = 'Time\'s up!';
+        notifyListeners();
+      } else {
+        // Only notify every 5 seconds or when time is critical
+        if (_timeRemaining % 5 == 0 || _timeRemaining <= 30) {
+          _scheduleNotification();
+        }
       }
-
-      notifyListeners();
     }
   }
 
@@ -273,8 +346,20 @@ class GameState extends ChangeNotifier {
   }
 
   void restartLevel() {
-    initializeGame(_currentLevel);
-    _score = 0; // Make sure score resets but bestScore persists
+    _suppressNotifications = true;
+
+    GameController.clearCache();
+    _grid = LevelGenerator.generateOptimalGrid(_createLimitedLevel(_currentLevel));
+    _score = 0;
+    _matchCount = 0;
+    _timeRemaining = _currentLevel.timeLimit;
+    _status = GameStatus.playing;
+    _selectedCell = null;
+    _currentPath = [];
+    _isAnimating = false;
+    _lastMessage = '';
+
+    _suppressNotifications = false;
     notifyListeners();
   }
 
@@ -285,36 +370,61 @@ class GameState extends ChangeNotifier {
     }
   }
 
-  // Reset game to level 1
   void resetGame() {
     initializeGame(Level.level1);
   }
 
-  // Get formatted time string
+  // Optimized formatted time (cached result)
+  String? _cachedFormattedTime;
+  int _lastFormattedTimeValue = -1;
+
   String get formattedTime {
-    final minutes = _timeRemaining ~/ 60;
-    final seconds = _timeRemaining % 60;
-    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+    if (_timeRemaining != _lastFormattedTimeValue) {
+      final minutes = _timeRemaining ~/ 60;
+      final seconds = _timeRemaining % 60;
+      _cachedFormattedTime = '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+      _lastFormattedTimeValue = _timeRemaining;
+    }
+    return _cachedFormattedTime!;
   }
 
-  // Check if there are any possible matches remaining (with path validation)
+  // Cached match availability check
+  bool? _cachedHasMatches;
+  int _lastMatchCheckHash = 0;
+
   bool hasAvailableMatches() {
-    return GameController.getAllPossibleMatches(_grid).isNotEmpty;
+    // Create a simple hash of the grid state
+    int currentHash = 0;
+    for (final row in _grid) {
+      for (final cell in row) {
+        if (!cell.isMatched) {
+          currentHash ^= (cell.row * 1000 + cell.col * 100 + cell.value);
+        }
+      }
+    }
+
+    if (currentHash != _lastMatchCheckHash || _cachedHasMatches == null) {
+      _cachedHasMatches = GameController.getAllPossibleMatches(_grid).isNotEmpty;
+      _lastMatchCheckHash = currentHash;
+    }
+
+    return _cachedHasMatches!;
   }
 
-  // Get hint for next possible match
   MatchPair? getHint() {
     return GameController.getHint(_grid);
   }
 
-  // Shuffle remaining cells (power-up feature)
+  // Optimized shuffle with reduced notifications
   void shuffleGrid() {
     if (_status != GameStatus.playing) return;
 
+    _suppressNotifications = true;
+
+    GameController.clearCache();
     final availableCells = <Cell>[];
     final values = <int>[];
 
-    // Collect all unmatched cells and their values
     for (int i = 0; i < gridSize; i++) {
       for (int j = 0; j < gridSize; j++) {
         if (!_grid[i][j].isMatched) {
@@ -324,55 +434,53 @@ class GameState extends ChangeNotifier {
       }
     }
 
-    // Shuffle the values
     values.shuffle();
 
-    // Reassign shuffled values to cells
     for (int i = 0; i < availableCells.length; i++) {
       final cell = availableCells[i];
       _grid[cell.row][cell.col] = cell.copyWith(value: values[i]);
     }
 
-    // Clear selection and path
     _selectedCell = null;
     _currentPath = [];
     _lastMessage = 'Grid shuffled!';
+    _cachedHasMatches = null; // Reset cache
 
+    _suppressNotifications = false;
     notifyListeners();
   }
 
-
-  // Remove a specific number from the grid (power-up feature)
   void removeNumber(int number) {
     if (_status != GameStatus.playing) return;
 
+    _suppressNotifications = true;
+
     int removed = 0;
-    for (int i = 0; i < gridSize; i++) {
-      for (int j = 0; j < gridSize; j++) {
+    for (int i = 0; i < gridSize && removed < 2; i++) {
+      for (int j = 0; j < gridSize && removed < 2; j++) {
         if (!_grid[i][j].isMatched && _grid[i][j].value == number) {
           _grid[i][j] = _grid[i][j].copyWith(state: CellState.matched);
           removed++;
-          if (removed >= 2) break; // Remove maximum 2 cells
         }
       }
-      if (removed >= 2) break;
     }
 
     if (removed > 0) {
-      _score += removed * 5; // Bonus points for using power-up
+      _score += removed * 5;
       _lastMessage = 'Removed $removed cells with number $number!';
+      GameController.clearCache();
+      _cachedHasMatches = null;
     } else {
       _lastMessage = 'No cells found with number $number';
     }
 
-    // Clear selection and path
     _selectedCell = null;
     _currentPath = [];
 
+    _suppressNotifications = false;
     notifyListeners();
   }
 
-  // Add time bonus (power-up feature)
   void addTimeBonus(int seconds) {
     if (_status == GameStatus.playing) {
       _timeRemaining += seconds;
@@ -381,31 +489,49 @@ class GameState extends ChangeNotifier {
     }
   }
 
-  // Show path preview when hovering over a cell (for UI feedback)
+  // Optimized path preview with throttling
+  DateTime _lastPreviewTime = DateTime.now();
+  static const Duration _previewThrottleTime = Duration(milliseconds: 50);
+
   void previewPath(int row, int col) {
+    final now = DateTime.now();
+    if (now.difference(_lastPreviewTime) < _previewThrottleTime) {
+      return; // Throttle preview updates
+    }
+    _lastPreviewTime = now;
+
     if (_selectedCell == null || _status != GameStatus.playing) {
-      _currentPath = [];
+      if (_currentPath.isNotEmpty) {
+        _currentPath = [];
+        notifyListeners();
+      }
+      return;
+    }
+
+    // Bounds checking
+    if (row < 0 || row >= gridSize || col < 0 || col >= gridSize) {
       return;
     }
 
     final targetCell = _grid[row][col];
     if (targetCell.isMatched || targetCell == _selectedCell) {
-      _currentPath = [];
+      if (_currentPath.isNotEmpty) {
+        _currentPath = [];
+        notifyListeners();
+      }
       return;
     }
 
-    // Check if cells can match and get path
-    if (GameController.canCellsMatch(_selectedCell!, targetCell, _grid)) {
-      final path = GameController.getPath(_selectedCell!, targetCell, _grid);
-      _currentPath = path ?? [];
-    } else {
-      _currentPath = [];
-    }
+    final newPath = GameController.canCellsMatch(_selectedCell!, targetCell, _grid)
+        ? (GameController.getPath(_selectedCell!, targetCell, _grid) ?? [])
+        : <Cell>[];
 
-    notifyListeners();
+    if (newPath != _currentPath) {
+      _currentPath = newPath;
+      notifyListeners();
+    }
   }
 
-  // Clear path preview
   void clearPathPreview() {
     if (_currentPath.isNotEmpty) {
       _currentPath = [];
@@ -413,12 +539,12 @@ class GameState extends ChangeNotifier {
     }
   }
 
-  // Get statistics for the current game
+  // Optimized statistics calculation
   GameStatistics getStatistics() {
     final totalCells = gridSize * gridSize;
     final matchedCells = _grid.expand((row) => row).where((cell) => cell.isMatched).length;
     final remainingCells = totalCells - matchedCells;
-    final possibleMatches = GameController.getAllPossibleMatches(_grid);
+    final possibleMatches = hasAvailableMatches() ? GameController.getAllPossibleMatches(_grid).length : 0;
 
     return GameStatistics(
       level: _currentLevel.levelNumber,
@@ -428,12 +554,11 @@ class GameState extends ChangeNotifier {
       timeRemaining: _timeRemaining,
       totalTime: _currentLevel.timeLimit,
       remainingCells: remainingCells,
-      possibleMatches: possibleMatches.length,
+      possibleMatches: possibleMatches,
       isComplete: isLevelComplete,
     );
   }
 
-  // Auto-hint system - highlights possible matches after inactivity
   void showAutoHint() {
     if (_status != GameStatus.playing) return;
 
@@ -442,7 +567,6 @@ class GameState extends ChangeNotifier {
       _currentPath = GameController.getPath(hint.cell1, hint.cell2, _grid) ?? [];
       _lastMessage = 'Hint: Try these cells! 💡';
 
-      // Clear hint after a few seconds
       Future.delayed(const Duration(seconds: 3), () {
         if (_currentPath.isNotEmpty) {
           _currentPath = [];
@@ -454,7 +578,7 @@ class GameState extends ChangeNotifier {
     }
   }
 
-  // Check if two specific cells can be matched (for UI validation)
+
   bool canMatchCells(int row1, int col1, int row2, int col2) {
     if (row1 < 0 || row1 >= gridSize || col1 < 0 || col1 >= gridSize ||
         row2 < 0 || row2 >= gridSize || col2 < 0 || col2 >= gridSize) {
@@ -467,25 +591,40 @@ class GameState extends ChangeNotifier {
     return GameController.canCellsMatch(cell1, cell2, _grid);
   }
 
-  // Get all numbers currently on the grid (for UI display)
+  // Cached available numbers
+  Set<int>? _cachedAvailableNumbers;
+  int _lastNumberCheckHash = 0;
+
   Set<int> getAvailableNumbers() {
-    final numbers = <int>{};
+    int currentHash = 0;
     for (final row in _grid) {
       for (final cell in row) {
         if (!cell.isMatched) {
-          numbers.add(cell.value);
+          currentHash ^= (cell.row * 100 + cell.col * 10 + cell.value);
         }
       }
     }
-    return numbers;
+
+    if (currentHash != _lastNumberCheckHash || _cachedAvailableNumbers == null) {
+      final numbers = <int>{};
+      for (final row in _grid) {
+        for (final cell in row) {
+          if (!cell.isMatched) {
+            numbers.add(cell.value);
+          }
+        }
+      }
+      _cachedAvailableNumbers = numbers;
+      _lastNumberCheckHash = currentHash;
+    }
+
+    return _cachedAvailableNumbers!;
   }
 
-  // Calculate completion percentage
   double get completionPercentage {
     return (_matchCount / _currentLevel.targetMatches).clamp(0.0, 1.0);
   }
 
-  // Get time pressure indicator (for UI coloring)
   TimePressure get timePressure {
     final ratio = _timeRemaining / _currentLevel.timeLimit;
     if (ratio > 0.5) return TimePressure.low;
@@ -493,9 +632,11 @@ class GameState extends ChangeNotifier {
     return TimePressure.high;
   }
 
-  // Dispose method for cleanup
   @override
-  void dispose() => super.dispose();
+  void dispose() {
+    GameController.clearCache();
+    super.dispose();
+  }
 }
 
 // Game statistics class

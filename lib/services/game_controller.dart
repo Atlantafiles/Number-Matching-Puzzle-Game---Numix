@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:math' as math;
 import '../models/cells.dart';
 import '../models/level.dart';
 import '../models/game_state.dart';
@@ -7,58 +8,64 @@ import '../models/game_state.dart';
 class GameController {
   Timer? _gameTimer;
 
+  // Cache for path finding results to avoid repeated calculations
+  static final Map<String, bool> _pathCache = {};
+  static final Map<String, List<Cell>?> _fullPathCache = {};
+
+  // Clear cache when grid changes
+  static void clearCache() {
+    _pathCache.clear();
+    _fullPathCache.clear();
+  }
+
   // Matching logic - now requires path connectivity
   static bool canMatch(int value1, int value2) {
     return value1 == value2 || value1 + value2 == 10;
   }
 
-  // Check if two cells can be matched (with path validation)
+  // Check if two cells can be matched (with path validation and caching)
   static bool canCellsMatch(Cell cell1, Cell cell2, List<List<Cell>> grid) {
     // Can't match with itself or already matched cells
     if (cell1 == cell2 || cell1.isMatched || cell2.isMatched) {
       return false;
     }
 
-    // Check if values can match
+    // Check if values can match first (fastest check)
     if (!canMatch(cell1.value, cell2.value)) {
       return false;
     }
 
+    // Use cache for path validation
+    final cacheKey = '${cell1.row},${cell1.col}-${cell2.row},${cell2.col}';
+    if (_pathCache.containsKey(cacheKey)) {
+      return _pathCache[cacheKey]!;
+    }
+
     // Check if there's a valid path between the cells
-    return hasValidPath(cell1, cell2, grid);
+    final hasPath = hasValidPath(cell1, cell2, grid);
+    _pathCache[cacheKey] = hasPath;
+    return hasPath;
   }
 
-  // Check if there's a valid path between two cells
+  // Optimized path validation with early returns
   static bool hasValidPath(Cell cell1, Cell cell2, List<List<Cell>> grid) {
-    // Try to find a path with at most 2 turns (L-shaped or straight line)
-    return _findPathWithMaxTurns(cell1, cell2, grid, 2);
+    if (cell1 == cell2) return false;
+
+    // Try direct paths first (fastest)
+    if (hasDirectPath(cell1, cell2, grid)) {
+      return true;
+    }
+
+    // Try L-shaped paths (moderate cost)
+    if (hasLShapedPath(cell1, cell2, grid)) {
+      return true;
+    }
+
+    // Try U-shaped paths (most expensive)
+    return _hasUShapedPath(cell1, cell2, grid);
   }
 
-  // Find path between cells with maximum number of turns allowed
-  static bool _findPathWithMaxTurns(Cell start, Cell end, List<List<Cell>> grid, int maxTurns) {
-    if (start == end) return false;
-
-    // Try direct paths first (0 turns)
-    if (hasDirectPath(start, end, grid)) {
-      return true;
-    }
-
-    if (maxTurns <= 0) return false;
-
-    // Try paths with one turn (L-shaped)
-    if (maxTurns >= 1 && hasLShapedPath(start, end, grid)) {
-      return true;
-    }
-
-    // Try paths with two turns (U-shaped)
-    if (maxTurns >= 2 && _hasUShapedPath(start, end, grid)) {
-      return true;
-    }
-
-    return false;
-  }
-
-  // Check for direct horizontal or vertical path - PUBLIC VERSION
+  // Optimized direct path check
   static bool hasDirectPath(Cell start, Cell end, List<List<Cell>> grid) {
     // Same row (horizontal path)
     if (start.row == end.row) {
@@ -73,87 +80,116 @@ class GameController {
     return false;
   }
 
-  // Check for L-shaped path (1 turn) - PUBLIC VERSION
+  // Optimized L-shaped path check
   static bool hasLShapedPath(Cell start, Cell end, List<List<Cell>> grid) {
+    // Quick boundary checks
+    final gridSize = grid.length;
+
     // Try corner at (start.row, end.col)
-    final corner1 = Cell(value: 0, row: start.row, col: end.col);
-    if (_isValidCorner(corner1, grid) &&
-        _isHorizontalPathClear(start, corner1, grid) &&
-        _isVerticalPathClear(corner1, end, grid)) {
+    if (_isValidPosition(start.row, end.col, gridSize) &&
+        _isValidCornerFast(start.row, end.col, grid) &&
+        _isHorizontalPathClearFast(start.row, start.col, end.col, grid) &&
+        _isVerticalPathClearFast(end.col, start.row, end.row, grid)) {
       return true;
     }
 
     // Try corner at (end.row, start.col)
-    final corner2 = Cell(value: 0, row: end.row, col: start.col);
-    if (_isValidCorner(corner2, grid) &&
-        _isVerticalPathClear(start, corner2, grid) &&
-        _isHorizontalPathClear(corner2, end, grid)) {
+    if (_isValidPosition(end.row, start.col, gridSize) &&
+        _isValidCornerFast(end.row, start.col, grid) &&
+        _isVerticalPathClearFast(start.col, start.row, end.row, grid) &&
+        _isHorizontalPathClearFast(end.row, start.col, end.col, grid)) {
       return true;
     }
 
     return false;
   }
 
-  // Check if horizontal path is clear
-  static bool _isHorizontalPathClear(Cell start, Cell end, List<List<Cell>> grid) {
-    final row = start.row;
-    final minCol = min(start.col, end.col);
-    final maxCol = max(start.col, end.col);
+  // Fast position validation
+  static bool _isValidPosition(int row, int col, int gridSize) {
+    return row >= 0 && row < gridSize && col >= 0 && col < gridSize;
+  }
 
-    // Check all cells between start and end
+  // Fast corner validation
+  static bool _isValidCornerFast(int row, int col, List<List<Cell>> grid) {
+    // Corner can be outside grid boundaries
+    if (row < 0 || row >= grid.length || col < 0 || col >= grid[0].length) {
+      return true;
+    }
+    return grid[row][col].isMatched;
+  }
+
+  // Optimized horizontal path checking
+  static bool _isHorizontalPathClearFast(int row, int startCol, int endCol, List<List<Cell>> grid) {
+    final minCol = math.min(startCol, endCol);
+    final maxCol = math.max(startCol, endCol);
+
+    // Early exit if invalid row
+    if (row < 0 || row >= grid.length) return true;
+
     for (int col = minCol + 1; col < maxCol; col++) {
-      if (!grid[row][col].isMatched) {
-        return false; // Path blocked by unmatched cell
+      if (col >= 0 && col < grid[row].length && !grid[row][col].isMatched) {
+        return false;
       }
     }
     return true;
   }
 
-  // Check if vertical path is clear
-  static bool _isVerticalPathClear(Cell start, Cell end, List<List<Cell>> grid) {
-    final col = start.col;
-    final minRow = min(start.row, end.row);
-    final maxRow = max(start.row, end.row);
+  // Optimized vertical path checking
+  static bool _isVerticalPathClearFast(int col, int startRow, int endRow, List<List<Cell>> grid) {
+    final minRow = math.min(startRow, endRow);
+    final maxRow = math.max(startRow, endRow);
 
-    // Check all cells between start and end
+    // Early exit if invalid column
+    if (col < 0 || col >= grid[0].length) return true;
+
     for (int row = minRow + 1; row < maxRow; row++) {
-      if (!grid[row][col].isMatched) {
-        return false; // Path blocked by unmatched cell
+      if (row >= 0 && row < grid.length && !grid[row][col].isMatched) {
+        return false;
       }
     }
     return true;
   }
 
-  // Check for U-shaped path (2 turns)
+  // Legacy methods for compatibility
+  static bool _isHorizontalPathClear(Cell start, Cell end, List<List<Cell>> grid) {
+    return _isHorizontalPathClearFast(start.row, start.col, end.col, grid);
+  }
+
+  static bool _isVerticalPathClear(Cell start, Cell end, List<List<Cell>> grid) {
+    return _isVerticalPathClearFast(start.col, start.row, end.row, grid);
+  }
+
+  static bool _isValidCorner(Cell corner, List<List<Cell>> grid) {
+    return _isValidCornerFast(corner.row, corner.col, grid);
+  }
+
+  // Optimized U-shaped path check with early exits
   static bool _hasUShapedPath(Cell start, Cell end, List<List<Cell>> grid) {
     final gridSize = grid.length;
 
-    // Try extending horizontally from start, then vertically, then horizontally to end
-    for (int extendCol = 0; extendCol < gridSize; extendCol++) {
+    // Try extending horizontally first (limit search space)
+    final maxExtend = math.max(gridSize, 10); // Limit search to reasonable bounds
+    for (int extendCol = 0; extendCol < maxExtend && extendCol < gridSize; extendCol++) {
       if (extendCol == start.col && extendCol == end.col) continue;
 
-      final corner1 = Cell(value: 0, row: start.row, col: extendCol);
-      final corner2 = Cell(value: 0, row: end.row, col: extendCol);
-
-      if (_isValidCorner(corner1, grid) && _isValidCorner(corner2, grid) &&
-          _isHorizontalPathClear(start, corner1, grid) &&
-          _isVerticalPathClear(corner1, corner2, grid) &&
-          _isHorizontalPathClear(corner2, end, grid)) {
+      if (_isValidCornerFast(start.row, extendCol, grid) &&
+          _isValidCornerFast(end.row, extendCol, grid) &&
+          _isHorizontalPathClearFast(start.row, start.col, extendCol, grid) &&
+          _isVerticalPathClearFast(extendCol, start.row, end.row, grid) &&
+          _isHorizontalPathClearFast(end.row, extendCol, end.col, grid)) {
         return true;
       }
     }
 
-    // Try extending vertically from start, then horizontally, then vertically to end
-    for (int extendRow = 0; extendRow < gridSize; extendRow++) {
+    // Try extending vertically (limit search space)
+    for (int extendRow = 0; extendRow < maxExtend && extendRow < gridSize; extendRow++) {
       if (extendRow == start.row && extendRow == end.row) continue;
 
-      final corner1 = Cell(value: 0, row: extendRow, col: start.col);
-      final corner2 = Cell(value: 0, row: extendRow, col: end.col);
-
-      if (_isValidCorner(corner1, grid) && _isValidCorner(corner2, grid) &&
-          _isVerticalPathClear(start, corner1, grid) &&
-          _isHorizontalPathClear(corner1, corner2, grid) &&
-          _isVerticalPathClear(corner2, end, grid)) {
+      if (_isValidCornerFast(extendRow, start.col, grid) &&
+          _isValidCornerFast(extendRow, end.col, grid) &&
+          _isVerticalPathClearFast(start.col, start.row, extendRow, grid) &&
+          _isHorizontalPathClearFast(extendRow, start.col, end.col, grid) &&
+          _isVerticalPathClearFast(end.col, extendRow, end.row, grid)) {
         return true;
       }
     }
@@ -161,70 +197,32 @@ class GameController {
     return false;
   }
 
-  // Check if a corner position is valid (matched cell or boundary)
-  static bool _isValidCorner(Cell corner, List<List<Cell>> grid) {
-    // Corner can be outside grid boundaries (conceptually)
-    if (corner.row < 0 || corner.row >= grid.length ||
-        corner.col < 0 || corner.col >= grid[0].length) {
-      return true; // Boundary is always passable
-    }
+  // Optimized match finding with early exits and batching
+  static List<MatchPair> getAllPossibleMatches(List<List<Cell>> grid) {
+    final matches = <MatchPair>[];
+    final gridSize = grid.length;
 
-    // Corner must be a matched cell to be passable
-    return grid[corner.row][corner.col].isMatched;
-  }
-
-  // Start the game timer
-  void startTimer(GameState gameState) {
-    stopTimer(); // Stop any existing timer
-
-    _gameTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (gameState.status == GameStatus.playing) {
-        gameState.decrementTime();
-
-        // Check if time is up
-        if (gameState.timeRemaining <= 0) {
-          stopTimer();
+    // Pre-collect unmatched cells for faster iteration
+    final unmatchedCells = <Cell>[];
+    for (int i = 0; i < gridSize; i++) {
+      for (int j = 0; j < gridSize; j++) {
+        if (!grid[i][j].isMatched) {
+          unmatchedCells.add(grid[i][j]);
         }
       }
-    });
-  }
-
-  // Stop the game timer
-  void stopTimer() {
-    _gameTimer?.cancel();
-    _gameTimer = null;
-  }
-
-  // Pause the timer
-  void pauseTimer() {
-    _gameTimer?.cancel();
-    _gameTimer = null;
-  }
-
-  // Resume the timer
-  void resumeTimer(GameState gameState) {
-    if (gameState.status == GameStatus.playing) {
-      startTimer(gameState);
     }
-  }
 
-  // Get all possible matches on the current grid (with path validation)
-  static List<MatchPair> getAllPossibleMatches(List<List<Cell>> grid) {
-    List<MatchPair> matches = [];
+    // Check combinations of unmatched cells only
+    for (int i = 0; i < unmatchedCells.length; i++) {
+      final cell1 = unmatchedCells[i];
+      for (int j = i + 1; j < unmatchedCells.length; j++) {
+        final cell2 = unmatchedCells[j];
 
-    for (int i = 0; i < grid.length; i++) {
-      for (int j = 0; j < grid[i].length; j++) {
-        if (grid[i][j].isMatched) continue;
-
-        for (int x = i; x < grid.length; x++) {
-          int startY = (x == i) ? j + 1 : 0;
-          for (int y = startY; y < grid[x].length; y++) {
-            if (grid[x][y].isMatched) continue;
-
-            // Check both value match and path connectivity
-            if (canCellsMatch(grid[i][j], grid[x][y], grid)) {
-              matches.add(MatchPair(grid[i][j], grid[x][y]));
-            }
+        // Quick value check first
+        if (canMatch(cell1.value, cell2.value)) {
+          // Then check path (this uses caching)
+          if (hasValidPath(cell1, cell2, grid)) {
+            matches.add(MatchPair(cell1, cell2));
           }
         }
       }
@@ -233,26 +231,53 @@ class GameController {
     return matches;
   }
 
-  // Get hint for next possible match
+  // Optimized hint system
   static MatchPair? getHint(List<List<Cell>> grid) {
-    final matches = getAllPossibleMatches(grid);
-    if (matches.isEmpty) return null;
-
-    // Return a random match from available matches
+    // Try to find a match quickly without generating all matches
+    final gridSize = grid.length;
     final random = Random();
-    return matches[random.nextInt(matches.length)];
+
+    // Collect unmatched cells
+    final unmatchedCells = <Cell>[];
+    for (int i = 0; i < gridSize; i++) {
+      for (int j = 0; j < gridSize; j++) {
+        if (!grid[i][j].isMatched) {
+          unmatchedCells.add(grid[i][j]);
+        }
+      }
+    }
+
+    if (unmatchedCells.length < 2) return null;
+
+    // Try random combinations for fast hint (limit attempts)
+    final maxAttempts = math.min(20, unmatchedCells.length * 2);
+    for (int attempt = 0; attempt < maxAttempts; attempt++) {
+      final cell1 = unmatchedCells[random.nextInt(unmatchedCells.length)];
+      final cell2 = unmatchedCells[random.nextInt(unmatchedCells.length)];
+
+      if (cell1 != cell2 && canCellsMatch(cell1, cell2, grid)) {
+        return MatchPair(cell1, cell2);
+      }
+    }
+
+    // Fallback to systematic search if random didn't work
+    final matches = getAllPossibleMatches(grid);
+    return matches.isEmpty ? null : matches[random.nextInt(matches.length)];
   }
 
-  // Check if the level is solvable (has enough matches)
+  // Optimized solvability check
   static bool isLevelSolvable(List<List<Cell>> grid, int targetMatches) {
-    return getAllPossibleMatches(grid).length >= targetMatches;
+    final matches = getAllPossibleMatches(grid);
+    return matches.length >= targetMatches;
   }
 
-  // Generate a balanced grid for a specific level (with numbers 1-9 only)
+  // Optimized grid generation
   static List<List<Cell>> generateBalancedGrid(Level level) {
+    clearCache(); // Clear cache for new grid
+
     List<List<Cell>> grid;
     int attempts = 0;
-    const maxAttempts = 100;
+    const maxAttempts = 50; // Reduced for faster generation
 
     do {
       grid = _generateRandomGrid(level);
@@ -260,7 +285,6 @@ class GameController {
     } while (!isLevelSolvable(grid, level.targetMatches) && attempts < maxAttempts);
 
     if (attempts >= maxAttempts) {
-      // Fallback: ensure we have at least the target matches
       grid = _generateGuaranteedSolvableGrid(level);
     }
 
@@ -269,11 +293,7 @@ class GameController {
 
   static List<List<Cell>> _generateRandomGrid(Level level) {
     final random = Random();
-    // Limit numbers to 1-9 only
-    final limitedNumbers = level.availableNumbers.where((num) => num >= 1 && num <= 9).toList();
-    if (limitedNumbers.isEmpty) {
-      limitedNumbers.addAll([1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    }
+    final limitedNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
     return List.generate(
       level.gridSize,
@@ -297,16 +317,13 @@ class GameController {
     );
 
     final random = Random();
+    final limitedNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9];
     final matchesNeeded = level.targetMatches;
 
-    // Limit numbers to 1-9 only
-    final limitedNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9];
-
-    // Place guaranteed matches in adjacent positions
+    // Place guaranteed matches efficiently
     int matchesPlaced = 0;
-    List<List<int>> positions = [];
+    final positions = <List<int>>[];
 
-    // Create list of all positions
     for (int i = 0; i < level.gridSize; i++) {
       for (int j = 0; j < level.gridSize; j++) {
         positions.add([i, j]);
@@ -314,35 +331,27 @@ class GameController {
     }
     positions.shuffle(random);
 
-    // Place matches in adjacent pairs
+    // Place matches in pairs
     for (int i = 0; i < positions.length - 1 && matchesPlaced < matchesNeeded; i += 2) {
       final pos1 = positions[i];
       final pos2 = positions[i + 1];
-
-      // Generate a matching pair
       final value = limitedNumbers[random.nextInt(limitedNumbers.length)];
 
-      if (random.nextBool()) {
+      if (random.nextBool() && value <= 5) {
+        // Sum to 10 match
+        final complement = 10 - value;
+        grid[pos1[0]][pos1[1]] = Cell(value: value, row: pos1[0], col: pos1[1]);
+        grid[pos2[0]][pos2[1]] = Cell(value: complement, row: pos2[0], col: pos2[1]);
+      } else {
         // Equal match
         grid[pos1[0]][pos1[1]] = Cell(value: value, row: pos1[0], col: pos1[1]);
         grid[pos2[0]][pos2[1]] = Cell(value: value, row: pos2[0], col: pos2[1]);
-      } else {
-        // Sum to 10 match
-        final complement = 10 - value;
-        if (complement > 0 && complement <= 9) {
-          grid[pos1[0]][pos1[1]] = Cell(value: value, row: pos1[0], col: pos1[1]);
-          grid[pos2[0]][pos2[1]] = Cell(value: complement, row: pos2[0], col: pos2[1]);
-        } else {
-          // Fallback to equal match
-          grid[pos1[0]][pos1[1]] = Cell(value: value, row: pos1[0], col: pos1[1]);
-          grid[pos2[0]][pos2[1]] = Cell(value: value, row: pos2[0], col: pos2[1]);
-        }
       }
 
       matchesPlaced++;
     }
 
-    // Fill remaining cells with random values (1-9)
+    // Fill remaining cells
     for (int i = 0; i < level.gridSize; i++) {
       for (int j = 0; j < level.gridSize; j++) {
         if (grid[i][j].value == 1 && matchesPlaced * 2 <= i * level.gridSize + j) {
@@ -355,53 +364,64 @@ class GameController {
     return grid;
   }
 
-  // Calculate difficulty score for a grid
+  // Fast difficulty calculation
   static double calculateDifficulty(List<List<Cell>> grid) {
     final matches = getAllPossibleMatches(grid);
     final totalCells = grid.length * grid[0].length;
-    final availableCells = totalCells - grid.expand((row) => row).where((cell) => cell.isMatched).length;
+    final unmatchedCount = grid.expand((row) => row).where((cell) => !cell.isMatched).length;
 
-    if (availableCells <= 1) return 0.0;
+    if (unmatchedCount <= 1) return 0.0;
 
-    // More matches = easier, fewer matches = harder
-    final matchRatio = matches.length / (availableCells * (availableCells - 1) / 2);
-    return 1.0 - matchRatio; // Invert so higher score = more difficult
+    final possiblePairs = unmatchedCount * (unmatchedCount - 1) / 2;
+    final matchRatio = matches.length / possiblePairs;
+    return (1.0 - matchRatio).clamp(0.0, 1.0);
   }
 
-  // Get the path between two cells for visualization
+  // Optimized path visualization with caching
   static List<Cell>? getPath(Cell start, Cell end, List<List<Cell>> grid) {
-    if (!hasValidPath(start, end, grid)) return null;
+    final cacheKey = '${start.row},${start.col}-${end.row},${end.col}-path';
+
+    if (_fullPathCache.containsKey(cacheKey)) {
+      return _fullPathCache[cacheKey];
+    }
+
+    if (!hasValidPath(start, end, grid)) {
+      _fullPathCache[cacheKey] = null;
+      return null;
+    }
+
+    List<Cell>? path;
 
     // Try direct path first
     if (hasDirectPath(start, end, grid)) {
-      return _getDirectPath(start, end);
+      path = _getDirectPath(start, end);
+    } else {
+      // Try L-shaped path
+      path = _getLShapedPath(start, end, grid);
+
+      if (path == null) {
+        // Try U-shaped path
+        path = _getUShapedPath(start, end, grid);
+      }
     }
 
-    // Try L-shaped path
-    final lPath = _getLShapedPath(start, end, grid);
-    if (lPath != null) return lPath;
-
-    // Try U-shaped path
-    final uPath = _getUShapedPath(start, end, grid);
-    if (uPath != null) return uPath;
-
-    return null;
+    _fullPathCache[cacheKey] = path;
+    return path;
   }
 
+  // Optimized path generation methods
   static List<Cell> _getDirectPath(Cell start, Cell end) {
-    List<Cell> path = [start];
+    final path = <Cell>[start];
 
     if (start.row == end.row) {
       // Horizontal path
       final step = start.col < end.col ? 1 : -1;
-
       for (int col = start.col + step; col != end.col; col += step) {
         path.add(Cell(value: 0, row: start.row, col: col));
       }
     } else {
       // Vertical path
       final step = start.row < end.row ? 1 : -1;
-
       for (int row = start.row + step; row != end.row; row += step) {
         path.add(Cell(value: 0, row: row, col: start.col));
       }
@@ -413,24 +433,24 @@ class GameController {
 
   static List<Cell>? _getLShapedPath(Cell start, Cell end, List<List<Cell>> grid) {
     // Try corner at (start.row, end.col)
-    final corner1 = Cell(value: 0, row: start.row, col: end.col);
-    if (_isValidCorner(corner1, grid) &&
-        _isHorizontalPathClear(start, corner1, grid) &&
-        _isVerticalPathClear(corner1, end, grid)) {
-      List<Cell> path = [start];
+    if (_isValidCornerFast(start.row, end.col, grid) &&
+        _isHorizontalPathClearFast(start.row, start.col, end.col, grid) &&
+        _isVerticalPathClearFast(end.col, start.row, end.row, grid)) {
 
-      // Add horizontal segment
+      final path = <Cell>[start];
+
+      // Horizontal segment
       final hStep = start.col < end.col ? 1 : -1;
       for (int col = start.col + hStep; col != end.col; col += hStep) {
         path.add(Cell(value: 0, row: start.row, col: col));
       }
 
-      // Add corner if not start or end position
-      if (corner1.row != start.row || corner1.col != start.col) {
-        path.add(corner1);
+      // Corner
+      if (start.row != end.row) {
+        path.add(Cell(value: 0, row: start.row, col: end.col));
       }
 
-      // Add vertical segment
+      // Vertical segment
       final vStep = start.row < end.row ? 1 : -1;
       for (int row = start.row + vStep; row != end.row; row += vStep) {
         path.add(Cell(value: 0, row: row, col: end.col));
@@ -441,24 +461,24 @@ class GameController {
     }
 
     // Try corner at (end.row, start.col)
-    final corner2 = Cell(value: 0, row: end.row, col: start.col);
-    if (_isValidCorner(corner2, grid) &&
-        _isVerticalPathClear(start, corner2, grid) &&
-        _isHorizontalPathClear(corner2, end, grid)) {
-      List<Cell> path = [start];
+    if (_isValidCornerFast(end.row, start.col, grid) &&
+        _isVerticalPathClearFast(start.col, start.row, end.row, grid) &&
+        _isHorizontalPathClearFast(end.row, start.col, end.col, grid)) {
 
-      // Add vertical segment
+      final path = <Cell>[start];
+
+      // Vertical segment
       final vStep = start.row < end.row ? 1 : -1;
       for (int row = start.row + vStep; row != end.row; row += vStep) {
         path.add(Cell(value: 0, row: row, col: start.col));
       }
 
-      // Add corner if not start or end position
-      if (corner2.row != start.row || corner2.col != start.col) {
-        path.add(corner2);
+      // Corner
+      if (start.col != end.col) {
+        path.add(Cell(value: 0, row: end.row, col: start.col));
       }
 
-      // Add horizontal segment
+      // Horizontal segment
       final hStep = start.col < end.col ? 1 : -1;
       for (int col = start.col + hStep; col != end.col; col += hStep) {
         path.add(Cell(value: 0, row: end.row, col: col));
@@ -474,35 +494,33 @@ class GameController {
   static List<Cell>? _getUShapedPath(Cell start, Cell end, List<List<Cell>> grid) {
     final gridSize = grid.length;
 
-    // Try extending horizontally first
-    for (int extendCol = 0; extendCol < gridSize; extendCol++) {
+    // Limit search space for performance
+    final maxExtend = math.min(gridSize, 15);
+
+    for (int extendCol = 0; extendCol < maxExtend; extendCol++) {
       if (extendCol == start.col && extendCol == end.col) continue;
 
-      final corner1 = Cell(value: 0, row: start.row, col: extendCol);
-      final corner2 = Cell(value: 0, row: end.row, col: extendCol);
+      if (_isValidCornerFast(start.row, extendCol, grid) &&
+          _isValidCornerFast(end.row, extendCol, grid) &&
+          _isHorizontalPathClearFast(start.row, start.col, extendCol, grid) &&
+          _isVerticalPathClearFast(extendCol, start.row, end.row, grid) &&
+          _isHorizontalPathClearFast(end.row, extendCol, end.col, grid)) {
 
-      if (_isValidCorner(corner1, grid) && _isValidCorner(corner2, grid) &&
-          _isHorizontalPathClear(start, corner1, grid) &&
-          _isVerticalPathClear(corner1, corner2, grid) &&
-          _isHorizontalPathClear(corner2, end, grid)) {
-
-        List<Cell> path = [start];
+        final path = <Cell>[start];
 
         // Horizontal to first corner
         final h1Step = start.col < extendCol ? 1 : -1;
         for (int col = start.col + h1Step; col != extendCol; col += h1Step) {
           path.add(Cell(value: 0, row: start.row, col: col));
         }
-        path.add(corner1);
+        path.add(Cell(value: 0, row: start.row, col: extendCol));
 
         // Vertical between corners
         final vStep = start.row < end.row ? 1 : -1;
         for (int row = start.row + vStep; row != end.row; row += vStep) {
           path.add(Cell(value: 0, row: row, col: extendCol));
         }
-        if (corner2.row != corner1.row || corner2.col != corner1.col) {
-          path.add(corner2);
-        }
+        path.add(Cell(value: 0, row: end.row, col: extendCol));
 
         // Horizontal to end
         final h2Step = extendCol < end.col ? 1 : -1;
@@ -518,9 +536,38 @@ class GameController {
     return null;
   }
 
-  // Cleanup resources
+  // Timer methods remain the same
+  void startTimer(GameState gameState) {
+    stopTimer();
+    _gameTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (gameState.status == GameStatus.playing) {
+        gameState.decrementTime();
+        if (gameState.timeRemaining <= 0) {
+          stopTimer();
+        }
+      }
+    });
+  }
+
+  void stopTimer() {
+    _gameTimer?.cancel();
+    _gameTimer = null;
+  }
+
+  void pauseTimer() {
+    _gameTimer?.cancel();
+    _gameTimer = null;
+  }
+
+  void resumeTimer(GameState gameState) {
+    if (gameState.status == GameStatus.playing) {
+      startTimer(gameState);
+    }
+  }
+
   void dispose() {
     stopTimer();
+    clearCache(); // Clean up cache on disposal
   }
 }
 
@@ -535,4 +582,15 @@ class MatchPair {
   String toString() {
     return 'MatchPair(${cell1.value} at (${cell1.row},${cell1.col}) + ${cell2.value} at (${cell2.row},${cell2.col}))';
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+          other is MatchPair &&
+              runtimeType == other.runtimeType &&
+              ((cell1 == other.cell1 && cell2 == other.cell2) ||
+                  (cell1 == other.cell2 && cell2 == other.cell1));
+
+  @override
+  int get hashCode => cell1.hashCode ^ cell2.hashCode;
 }

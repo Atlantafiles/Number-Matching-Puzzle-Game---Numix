@@ -17,6 +17,9 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   late AnimationController _headerAnimationController;
   late Animation<Offset> _headerSlideAnimation;
 
+  // Cache formatted numbers to avoid repeated string operations
+  final Map<int, String> _formattedNumberCache = {};
+
   @override
   void initState() {
     super.initState();
@@ -35,13 +38,12 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       curve: Curves.elasticOut,
     ));
 
-    // Start animations
     _headerAnimationController.forward();
 
-    // Initialize game
+    // Initialize game efficiently
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final gameState = Provider.of<GameState>(context, listen: false);
-      gameState.checkAndUpdateBestScore(); // Load best score first
+      gameState.checkAndUpdateBestScore();
       gameState.initializeGame(Level.level1);
       _gameController.startTimer(gameState);
     });
@@ -54,16 +56,29 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     super.dispose();
   }
 
+  // Cached time formatting
   String _formatTime(int seconds) {
     final minutes = seconds ~/ 60;
     final remainingSeconds = seconds % 60;
     return '${minutes.toString().padLeft(2, '0')}:${remainingSeconds.toString().padLeft(2, '0')}';
   }
 
+  String _formatNumber(int number) {
+    return _formattedNumberCache.putIfAbsent(
+      number,
+          () => number.toString().replaceAllMapped(
+        RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
+            (Match m) => '${m[1]},',
+      ),
+    );
+  }
+
   void _showGameOverDialog(GameState gameState) {
+    // Prevent multiple dialogs
+    if (ModalRoute.of(context)?.isCurrent != true) return;
+
     gameState.checkAndUpdateBestScore();
 
-    // Check if this is the final level completion
     final isGameComplete = gameState.status == GameStatus.won &&
         gameState.currentLevel.levelNumber >= 3;
 
@@ -103,7 +118,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
               ),
               const SizedBox(height: 16),
               Text(
-                '🏆 Final Score: ${gameState.score}',
+                '🏆 Final Score: ${_formatNumber(gameState.score)}',
                 style: const TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
@@ -122,7 +137,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
               ),
             ] else ...[
               Text(
-                'Score: ${gameState.score}',
+                'Score: ${_formatNumber(gameState.score)}',
                 style: const TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w600,
@@ -145,7 +160,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
             TextButton(
               onPressed: () {
                 Navigator.of(context).pop();
-                // Reset to level 1 and start over
                 gameState.initializeGame(Level.level1);
                 _gameController.startTimer(gameState);
               },
@@ -224,8 +238,9 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       body: SafeArea(
         child: Consumer<GameState>(
           builder: (context, gameState, child) {
-            // Show dialog when game ends
-            if (gameState.status == GameStatus.won || gameState.status == GameStatus.timeUp) {
+            // Show dialog when game ends (with protection against multiple calls)
+            if ((gameState.status == GameStatus.won || gameState.status == GameStatus.timeUp) &&
+                ModalRoute.of(context)?.isCurrent == true) {
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 _showGameOverDialog(gameState);
               });
@@ -235,10 +250,10 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
               padding: const EdgeInsets.all(20),
               child: Column(
                 children: [
-                  // Header with game stats
+                  // Header with game stats - use Selector for specific parts
                   SlideTransition(
                     position: _headerSlideAnimation,
-                    child: _buildHeader(gameState),
+                    child: _buildOptimizedHeader(gameState),
                   ),
 
                   const SizedBox(height: 30),
@@ -263,8 +278,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
 
                   const SizedBox(height: 20),
 
-                  // Best score
-                  _buildBestScore(),
+                  // Best score - separate selector to avoid unnecessary rebuilds
+                  _buildOptimizedBestScore(),
                 ],
               ),
             );
@@ -274,99 +289,23 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildHeader(GameState gameState) {
+  Widget _buildOptimizedHeader(GameState gameState) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        // Level
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'LEVEL',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: Colors.black54,
-                letterSpacing: 1,
-              ),
-            ),
-            Text(
-              '${gameState.currentLevel.levelNumber}',
-              style: const TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
-            ),
-          ],
+        // Level - rarely changes
+        _LevelDisplay(level: gameState.currentLevel.levelNumber),
+
+        // Timer - changes frequently, needs optimization
+        _TimerDisplay(
+          timeRemaining: gameState.timeRemaining,
+          formatTime: _formatTime,
         ),
 
-        // Timer
-        Column(
-          children: [
-            const Text(
-              'TIMER',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: Colors.black54,
-                letterSpacing: 1,
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: gameState.timeRemaining <= 30
-                    ? Colors.red[50]
-                    : Colors.grey[100],
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: gameState.timeRemaining <= 30
-                      ? Colors.red[300]!
-                      : Colors.grey[300]!,
-                ),
-              ),
-              child: Text(
-                _formatTime(gameState.timeRemaining),
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  fontFamily: 'monospace',
-                  color: gameState.timeRemaining <= 30
-                      ? Colors.red[700]
-                      : Colors.black87,
-                ),
-              ),
-            ),
-          ],
-        ),
-
-        // Score
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            const Text(
-              'SCORE',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: Colors.black54,
-                letterSpacing: 1,
-              ),
-            ),
-            Text(
-              gameState.score.toString().replaceAllMapped(
-                RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
-                    (Match m) => '${m[1]},',
-              ),
-              style: const TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
-            ),
-          ],
+        // Score - changes on matches
+        _ScoreDisplay(
+          score: gameState.score,
+          formatNumber: _formatNumber,
         ),
       ],
     );
@@ -376,23 +315,22 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
-        // New Game Button
         _buildControlButton(
           label: 'New Game',
           icon: Icons.refresh,
           color: const Color(0xFF4834D4),
-          onPressed: () {
+          onPressed: gameState.isAnimating ? null : () {
             gameState.restartLevel();
             _gameController.startTimer(gameState);
           },
         ),
-
-        // Undo Button (placeholder for future feature)
         _buildControlButton(
-          label: 'Undo',
-          icon: Icons.undo,
-          color: Colors.grey[400]!,
-          onPressed: null, // Disabled for now
+          label: 'Hint',
+          icon: Icons.lightbulb_outline,
+          color: Colors.orange[600]!,
+          onPressed: gameState.isAnimating ? null : () {
+            gameState.showAutoHint();
+          },
         ),
       ],
     );
@@ -417,6 +355,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
               borderRadius: BorderRadius.circular(25),
             ),
             padding: const EdgeInsets.symmetric(vertical: 16),
+            disabledBackgroundColor: Colors.grey[400],
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -437,9 +376,10 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildBestScore() {
-    return Consumer<GameState>(
-      builder: (context, gameState, child) {
+  Widget _buildOptimizedBestScore() {
+    return Selector<GameState, int>(
+      selector: (context, gameState) => gameState.bestScore,
+      builder: (context, bestScore, child) {
         return Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -450,10 +390,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
             ),
             const SizedBox(width: 8),
             Text(
-              'Best Score: ${gameState.bestScore.toString().replaceAllMapped(
-                RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
-                    (Match m) => '${m[1]},',
-              )}',
+              'Best Score: ${_formatNumber(bestScore)}',
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
@@ -463,6 +400,123 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
           ],
         );
       },
+    );
+  }
+}
+
+// Optimized widgets to prevent unnecessary rebuilds
+class _LevelDisplay extends StatelessWidget {
+  final int level;
+
+  const _LevelDisplay({required this.level});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'LEVEL',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: Colors.black54,
+            letterSpacing: 1,
+          ),
+        ),
+        Text(
+          '$level',
+          style: const TextStyle(
+            fontSize: 28,
+            fontWeight: FontWeight.bold,
+            color: Colors.black87,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TimerDisplay extends StatelessWidget {
+  final int timeRemaining;
+  final String Function(int) formatTime;
+
+  const _TimerDisplay({
+    required this.timeRemaining,
+    required this.formatTime,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isLowTime = timeRemaining <= 30;
+
+    return Column(
+      children: [
+        const Text(
+          'TIMER',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: Colors.black54,
+            letterSpacing: 1,
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: isLowTime ? Colors.red[50] : Colors.grey[100],
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isLowTime ? Colors.red[300]! : Colors.grey[300]!,
+            ),
+          ),
+          child: Text(
+            formatTime(timeRemaining),
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              fontFamily: 'monospace',
+              color: isLowTime ? Colors.red[700] : Colors.black87,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ScoreDisplay extends StatelessWidget {
+  final int score;
+  final String Function(int) formatNumber;
+
+  const _ScoreDisplay({
+    required this.score,
+    required this.formatNumber,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        const Text(
+          'SCORE',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: Colors.black54,
+            letterSpacing: 1,
+          ),
+        ),
+        Text(
+          formatNumber(score),
+          style: const TextStyle(
+            fontSize: 28,
+            fontWeight: FontWeight.bold,
+            color: Colors.black87,
+          ),
+        ),
+      ],
     );
   }
 }
